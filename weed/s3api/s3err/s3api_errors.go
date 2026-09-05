@@ -385,11 +385,9 @@ var errorCodeResponse = map[ErrorCode]APIError{
 	ErrIdempotentParameterMismatch: {
 		Code:        "IdempotentParameterMismatch",
 		Description: "The request uses the same client token as a previous, but non-identical request.",
-		// 409, not 400: the request is well formed, and sending it again unchanged
-		// will not help. What it collides with is a rename this token already
-		// stands for, which is what Conflict says and what a client needs in order
-		// to stop retrying.
-		HTTPStatusCode: http.StatusConflict,
+		// 400 Bad Request, matching the AWS S3 RenameObject API documentation
+		// for IdempotencyParameterMismatch.
+		HTTPStatusCode: http.StatusBadRequest,
 	},
 	ErrInvalidTag: {
 		Code:           "InvalidTag",

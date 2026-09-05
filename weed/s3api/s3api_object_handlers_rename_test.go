@@ -173,12 +173,11 @@ func TestRenameTokenAnswersItsOwnRetry(t *testing.T) {
 	assert.True(t, s3_constants.IsSeaweedFSInternalHeader(s3_constants.SeaweedFSRenameToken))
 }
 
-// A reused token is refused, and the status code is the whole point of refusing
-// it that way: 400 tells a client its request was malformed and invites it to
-// give up, 409 tells it the request collided with one that already stands.
-func TestRenameTokenReuseAnswersConflict(t *testing.T) {
+// A reused token is refused with 400 Bad Request, matching the AWS S3
+// RenameObject API documentation for IdempotencyParameterMismatch.
+func TestRenameTokenReuseAnswersBadRequest(t *testing.T) {
 	api := s3err.GetAPIError(s3err.ErrIdempotentParameterMismatch)
-	assert.Equal(t, http.StatusConflict, api.HTTPStatusCode)
+	assert.Equal(t, http.StatusBadRequest, api.HTTPStatusCode)
 	assert.Equal(t, "IdempotentParameterMismatch", api.Code)
 }
 
