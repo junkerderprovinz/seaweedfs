@@ -383,13 +383,13 @@ var errorCodeResponse = map[ErrorCode]APIError{
 		HTTPStatusCode: http.StatusBadRequest,
 	},
 	ErrIdempotentParameterMismatch: {
-		Code:           "IdempotentParameterMismatch",
-		Description:    "The request uses the same client token as a previous, but non-identical request.",
+		Code:        "IdempotentParameterMismatch",
+		Description: "The request uses the same client token as a previous, but non-identical request.",
 		// 409, not 400: the request is well formed, and sending it again unchanged
 		// will not help. What it collides with is a rename this token already
 		// stands for, which is what Conflict says and what a client needs in order
 		// to stop retrying.
-		HTTPStatusCode: http.StatusBadRequest,
+		HTTPStatusCode: http.StatusConflict,
 	},
 	ErrInvalidTag: {
 		Code:           "InvalidTag",

@@ -109,17 +109,8 @@ func (s3a *S3ApiServer) RenameObjectHandler(w http.ResponseWriter, r *http.Reque
 		if errCode != s3err.ErrNone {
 			return errCode
 		}
-		switch classifyRenameToken(dstEntry, clientToken, renameSource, dstObject) {
-		case renameTokenReused:
-			return s3err.ErrIdempotentParameterMismatch
-		case renameTokenSameRequest:
-			// This rename already committed and only its response was lost, so the
-			// source it names is gone for good and no retry can succeed on its own.
-			// A source that is back is not that retry: the move is still to be made,
-			// and making it is what leaves the caller where it asked to be.
-			if srcErrCode == s3err.ErrNoSuchKey {
-				return s3err.ErrNone
-			}
+		if errCode, settled := retryRenameDecision(dstEntry, clientToken, renameSource, dstObject, srcErrCode); settled {
+			return errCode
 		}
 		if srcErrCode != s3err.ErrNone {
 			return srcErrCode
@@ -296,6 +287,27 @@ func classifyRenameToken(dstEntry *filer_pb.Entry, clientToken, renameSource, ds
 	return renameTokenSameRequest
 }
 
+// retryRenameDecision says what to do with a request whose destination carries
+// a rename token. settled=true means the request is answered (return errCode);
+// settled=false means continue with the rename.
+//
+// A reused token is refused. A token from this very rename is answered as
+// success only when the source is gone — the move already committed and only
+// its response was lost. A source that is back is not that retry: the move is
+// still to be made, and making it is what leaves the caller where it asked to
+// be, so the decision falls through and the rename proceeds.
+func retryRenameDecision(dstEntry *filer_pb.Entry, clientToken, renameSource, dstObject string, srcErrCode s3err.ErrorCode) (s3err.ErrorCode, bool) {
+	switch classifyRenameToken(dstEntry, clientToken, renameSource, dstObject) {
+	case renameTokenReused:
+		return s3err.ErrIdempotentParameterMismatch, true
+	case renameTokenSameRequest:
+		if srcErrCode == s3err.ErrNoSuchKey {
+			return s3err.ErrNone, true
+		}
+	}
+	return s3err.ErrNone, false
+}
+
 // markRenameToken puts the client token on the entry the rename moves.
 func markRenameToken(srcEntry *filer_pb.Entry, clientToken, renameSource, dstObject string) error {
 	stamped, err := json.Marshal(renameToken{Token: clientToken, Source: renameSource, Dest: dstObject, Unix: time.Now().Unix()})
@@ -333,8 +345,12 @@ func (s3a *S3ApiServer) stampRenameToken(bucket, srcObject, dstObject string, sr
 	}
 
 	// AtomicRenameEntry moves the entry as the filer holds it, so the token has to
-	// be on the source for the move to carry it. The precondition keeps the write
-	// off an object another gateway replaced in the meantime.
+	// be on the source for the move to carry it. markRenameToken already mutated
+	// srcEntry.Extended in place, so the move carries the token to the destination
+	// whether or not this UpdateEntry succeeds — the write only persists the token
+	// on the source ahead of the move, and a lost write costs idempotency, not
+	// correctness. The precondition keeps the write off an object another gateway
+	// replaced in the meantime.
 	srcDir, _ := util.FullPath(s3a.toFilerPath(bucket, srcObject)).DirAndName()
 	if err := s3a.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
 		return filer_pb.UpdateEntry(context.Background(), client, &filer_pb.UpdateEntryRequest{

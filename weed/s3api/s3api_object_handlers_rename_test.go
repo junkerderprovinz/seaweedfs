@@ -217,6 +217,52 @@ func TestClassifyRenameToken(t *testing.T) {
 	}
 }
 
+// TestRetryRenameDecision covers the handler's retry branch, including the
+// fallthrough the classification alone cannot express: when the destination
+// carries this request's token but the source is still there, the rename is
+// performed rather than short-circuited.
+func TestRetryRenameDecision(t *testing.T) {
+	const clientToken = "rename-token-of-this-request"
+	const renameSource = "/bucket/src.txt"
+
+	stamped := func(token renameToken) *filer_pb.Entry {
+		raw, err := json.Marshal(token)
+		require.NoError(t, err)
+		return &filer_pb.Entry{Name: "dst.txt", Extended: map[string][]byte{s3_constants.SeaweedFSRenameToken: raw}}
+	}
+	live := renameToken{Token: clientToken, Source: renameSource, Dest: "dst.txt", Unix: time.Now().Unix()}
+
+	tests := []struct {
+		name        string
+		dstEntry    *filer_pb.Entry
+		clientToken string
+		srcErrCode  s3err.ErrorCode
+		wantErr     s3err.ErrorCode
+		wantSettled bool
+	}{
+		// A retry whose source is gone is answered as success.
+		{"same request, source gone", stamped(live), clientToken, s3err.ErrNoSuchKey, s3err.ErrNone, true},
+		// A retry whose source is back falls through: the rename proceeds.
+		{"same request, source present", stamped(live), clientToken, s3err.ErrNone, s3err.ErrNone, false},
+		// A reused token is refused regardless of source state.
+		{"reused token, source gone", stamped(renameToken{Token: clientToken, Source: "/bucket/other.txt", Dest: "dst.txt", Unix: time.Now().Unix()}), clientToken, s3err.ErrNoSuchKey, s3err.ErrIdempotentParameterMismatch, true},
+		{"reused token, source present", stamped(renameToken{Token: clientToken, Source: "/bucket/other.txt", Dest: "dst.txt", Unix: time.Now().Unix()}), clientToken, s3err.ErrNone, s3err.ErrIdempotentParameterMismatch, true},
+		// An unrelated destination falls through to the ordinary rename path.
+		{"unrelated, source gone", nil, clientToken, s3err.ErrNoSuchKey, s3err.ErrNone, false},
+		{"unrelated, source present", nil, clientToken, s3err.ErrNone, s3err.ErrNone, false},
+		// A request without a token is never settled by the retry path.
+		{"no token, destination stamped", stamped(live), "", s3err.ErrNoSuchKey, s3err.ErrNone, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			errCode, settled := retryRenameDecision(tc.dstEntry, tc.clientToken, renameSource, "dst.txt", tc.srcErrCode)
+			assert.Equal(t, tc.wantSettled, settled)
+			assert.Equal(t, tc.wantErr, errCode)
+		})
+	}
+}
+
 // TestRouting_RenameObject pins PUT /bucket/key?renameObject to the RenameObject
 // route rather than the plain PutObject one that would otherwise match it.
 func TestRouting_RenameObject(t *testing.T) {
