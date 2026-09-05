@@ -389,7 +389,7 @@ var errorCodeResponse = map[ErrorCode]APIError{
 		// will not help. What it collides with is a rename this token already
 		// stands for, which is what Conflict says and what a client needs in order
 		// to stop retrying.
-		HTTPStatusCode: http.StatusConflict,
+		HTTPStatusCode: http.StatusBadRequest,
 	},
 	ErrInvalidTag: {
 		Code:           "InvalidTag",
